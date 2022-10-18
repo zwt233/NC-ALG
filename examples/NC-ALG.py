@@ -39,6 +39,24 @@ hidden_size = 128
 num_val = 500
 num_test = 1000
 
+def get_activated_node_dense_init(node,reliable_score,activated_node): 
+    activated_vector=((adj_matrix2[node]*reliable_score)>th)+0
+    activated_vector=activated_vector*activated_node
+    count=num_ones.dot(activated_vector)
+    return count,activated_vector
+
+def get_max_reliable_info_node_dense_init(idx_used,high_score_nodes,activated_node,labels): 
+    max_ral_node = 0
+    max_activated_node = 0
+    max_activated_num = 0 
+    for node in high_score_nodes:
+        reliable_score = oracle_acc
+        activated_num,activated_node_tmp =get_activated_node_dense_init(node,reliable_score,activated_node)
+        if activated_num > max_activated_num:
+            max_activated_num = activated_num
+            max_ral_node = node
+            max_activated_node = activated_node_tmp        
+    return max_ral_node,max_activated_node,max_activated_num
 
 def get_activated_node_dense(node,reliable_score,activated_node): 
     activated_vector=((adj_matrix2[node]*reliable_score)>=th)+0
@@ -173,6 +191,7 @@ class GCN(nn.Module):
         return x
    
 def train(epoch, model,record,optimizer):
+
     model.train()
     optimizer.zero_grad()
     output = model(features_GCN, adj)
@@ -245,14 +264,13 @@ for i in range(num_node):
     if i not in idx_val and i not in idx_test:
         idx_avaliable.append(i)
 
-wrong_nodes = random.sample(idx_avaliable,int((1-oracle_acc)*len(idx_avaliable)))
 label_list=[]
-prob_list = np.full((num_class,num_class),(1)/(num_class-1)).tolist()
+prob_list = np.full((num_class,num_class),(1-oracle_acc)/(num_class-1)).tolist()
 for i in range(num_class):
     label_list.append(i)
-    prob_list[i][i]=0
-for idx in wrong_nodes:
-    labels[idx]=torch.tensor(random_pick(label_list,prob_list[labels[idx].item()]))
+    prob_list[i][i]=oracle_acc
+for idx in idx_avaliable:
+    labels[idx]=torch.tensor(random_pick(label_list,prob_list[labels[idx]]))
 #compute normalized distance
 adj1 = aug_normalized_adjacency(adj)
 adj2 = left_normalized_adjacency(adj)
@@ -283,11 +301,18 @@ idx_train = []
 idx_avaliable_temp = copy.deepcopy(idx_avaliable)
 count = 0
 batch_node_num = 0
-count = 2*num_class
-idx_train = random.sample(idx_avaliable,count)
-for node_ in idx_train:
-    idx_avaliable.remove(node_)
-    idx_avaliable_temp.remove(node_)
+
+while True:
+    max_ral_node,max_activated_node,max_activated_num = get_max_reliable_info_node_dense_init(idx_train,idx_avaliable_temp,activated_node,labels) 
+    idx_train.append(max_ral_node) 
+    idx_avaliable.remove(max_ral_node)
+    idx_avaliable_temp.remove(max_ral_node)
+    count += 1
+    activated_node = activated_node - max_activated_node
+    reliability_list[max_ral_node] = oracle_acc
+    if count >= 2*num_class or max_activated_num <= 0:
+        break
+
 
 activated_node = np.ones(num_node)
 while True:
@@ -322,10 +347,13 @@ while True:
                 idx_avaliable.remove(node)
                 idx_avaliable_temp.remove(node)
         batch_node_num = 0
+    print('the number '+str(count)+' node is selected, with '+str(max_activated_num)+' nodes activated')
+    print("select time elapsed: {:.4f}s".format(time.time() - t1))
     activated_node = activated_node - max_activated_node
     if count >= num_coreset or max_activated_num <= 0:
         break
 
+print('node selection finished')
 
 labels = torch.LongTensor(labels).cuda()
 idx_train = torch.LongTensor(idx_train).cuda()
